@@ -1,0 +1,222 @@
+#include <Arduino.h>
+#include <HardwareSerial.h>
+
+//PIN decleration
+
+//Input
+int netlight_sense = PB15;
+int gsm_power_sense = PB0;
+int gps_1PPS = PB14;
+//Output
+int gsm_power_out = PB5;
+int power_key = PB13;
+int buzzer = PC15;
+int led0 = PA0;
+int led1 = PA1;
+int led2 = PF1;
+
+//Pins for serial
+
+HardwareSerial AT(PB7, PB6); //(AT means MC60)
+HardwareSerial PC(PB9, PB8); //This will be Driver in future
+
+//Code variables
+
+char ch;         //for debugging
+int loop_number; //number of loops 0-1000;
+int max_loop_number = 1000000;
+
+//FUNCTIONS
+
+void MC60toPC()
+{
+  //Reading from MC60 and sending to PC over serial
+  if (AT.available())
+  {
+    digitalWrite(led1, HIGH);
+    ch = AT.read();
+    PC.write(ch);
+    digitalWrite(led1, LOW);
+  }
+}
+
+void PCtoMC60()
+{
+  //Reading keys and sending to MC60
+  if (PC.available())
+  {
+    digitalWrite(led0, HIGH);
+    ch = PC.read();
+    AT.write(ch);
+    digitalWrite(led0, LOW);
+  }
+}
+
+void MC60_debug()
+{
+  // This function is for direct access to mc60 bypassing the STM.
+  //STM relays serial port.
+
+  MC60toPC();
+  PCtoMC60();
+}
+
+void pulse(int pin, int ms)
+{
+  //grounding a pin for a glimpse
+  digitalWrite(pin, HIGH);
+  delay(ms);
+  digitalWrite(pin, LOW);
+  delay(ms);
+  digitalWrite(pin, HIGH);
+  delay(ms);
+}
+
+void loop_number_tick()
+{
+  //to measure loop speed
+  if (loop_number < max_loop_number)
+  {
+    loop_number++;
+  }
+  else
+  {
+    //if you want to use more than once;
+    loop_number = 0;
+  }
+}
+
+void activateGPS()
+{
+  //Powers GPS
+
+  AT.write("AT+QGNSSC=1\n");
+}
+
+void readGPS()
+{
+  //read GPS data in a format
+
+  //AT.write("AT+QGNSSRD?\n"); //print all formats
+  AT.write("AT+QGNSSRD=\"NMEA/GGA\"\n"); //print only gga format
+}
+
+void power_MC60s_reg()
+{ float required_voltage=4.0; //minimum safe voltage for MC60
+  //Power on the 4.5v reg if not powered on.
+  if (analogRead(gsm_power_sense) < int(required_voltage*4096/3.3))
+  {
+    PC.println("Initializing 4.5V reg... (1 sec)");
+    pulse(gsm_power_out, 100);
+    delay(1000); //wait for regulator init.
+  }
+  else
+  {
+    PC.println("Regulator is online.");
+  }
+}
+
+void wake_MC60_up()
+{
+  //AT MC60 if he is awake
+  for (int i=0; i<3; i++) {
+      AT.write("AT\n");
+      delay(500);}
+  if (AT.read() == 65 || AT.read() == 84 || AT.read() == 10 || AT.read() == 13)
+  {
+    //MC60 is online, no need to boot.
+    PC.println("MC60 is ready for duty, sir!");
+  }
+  else
+  {
+    //MC60 is offline.
+    //boot MC60 if reg is online.
+    if (analogRead(gsm_power_sense) > 100) //<< here we should compare the voltage but our gsm_power_sense is only giving so this value is used for now.
+    {
+      PC.println("Power ok, booting MC60... (5 sec)");
+      pulse(power_key, 100);
+      delay(2000); //wait for MC60 boot
+
+      //then check whether it is online.
+      for (int i=0; i<3; i++) {
+      AT.write("AT\n");
+      delay(500);}
+      if (AT.read() == 65 || AT.read() == 84 || AT.read() == 10 || AT.read() == 13)
+      {
+        //MC60 is now ready for orders, sir.
+        PC.println("MC60 is now ready for orders, sir");
+      }
+      else
+      {
+        PC.println("ERROR: We have no life signs from MC60. CALL MEDIC!");
+      }
+    }
+    else
+    {
+      PC.println("ERROR: Power failure on 4.5 reg. Definetely your fault.");
+    }
+  }
+}
+
+void setup()
+{
+  //SERIAL INITIALISATION
+  AT.begin(9600);
+  PC.begin(9600);
+
+  //PINMODE DECLERATIONS
+  //Inputs
+  pinMode(netlight_sense, INPUT);
+  pinMode(gsm_power_sense, INPUT);
+  pinMode(gps_1PPS, INPUT);
+  //Outputs
+  pinMode(gsm_power_out, OUTPUT);
+  pinMode(power_key, OUTPUT);
+  pinMode(buzzer, OUTPUT);
+  pinMode(led0, OUTPUT);
+  pinMode(led1, OUTPUT);
+  pinMode(led2, OUTPUT);
+
+  //MC60 INIT
+  power_MC60s_reg();
+  //pulse(gsm_power_out, 100);
+  //delay(2000);
+
+  wake_MC60_up();
+  //pulse(power_key, 100);
+  
+  //Say hi
+
+  PC.write("Good morning!\n");
+
+  //Power on GPS
+
+  PC.write("Activating GPS...\n");
+  activateGPS();
+}
+
+void loop()
+{
+  /*
+  //BUZZ
+  tone(buzzer, 25); // Send 1KHz sound signal...
+  delay(1000);        // ...for 1 sec
+  noTone(buzzer);     // Stop sound...
+  delay(2000);        // ...for 1sec
+  */
+
+  //Count loops up to max
+  loop_number_tick();
+
+  //SLOW LOOP
+  if (loop_number == 0)
+  {
+
+    PC.write("\nLoping...\nGsm Power Sense: ");
+    PC.println(analogRead(gsm_power_sense));
+    readGPS();
+  }
+
+  //Eavesdrop the UART traffic
+  MC60_debug();
+}
